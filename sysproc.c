@@ -89,3 +89,31 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+int
+sys_cps(void)
+{
+  return cps();
+}
+
+int sys_waitx(void)
+{
+  int wtime;
+  int rtime;
+  if(argint(0, &wtime) < 0)
+    return -1;
+  if(argint(1, &rtime) < 0)
+    return -1;
+  return waitx((int*)wtime, (int*)rtime);
+}
+
+int sys_set_priority(void)
+{
+  int pid;
+  int priority;
+  if(argint(0, &pid) < 0)
+    return -1;
+  if(argint(1, &priority) < 0)
+    return -1;
+  return set_priority(pid, priority);
+}

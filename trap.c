@@ -54,6 +54,13 @@ trap(struct trapframe *tf)
       wakeup(&ticks);
       release(&tickslock);
     }
+    if(myproc())
+    {
+      if(myproc()->state == RUNNING)
+        myproc()->rtime++;
+      else if(myproc()->state == SLEEPING)
+        myproc()->iotime++;
+    }
     lapiceoi();
     break;
   case T_IRQ0 + IRQ_IDE:
@@ -102,9 +109,11 @@ trap(struct trapframe *tf)
 
   // Force process to give up CPU on clock tick.
   // If interrupts were on while locks held, would need to check nlock.
+  #ifndef FCFS
   if(myproc() && myproc()->state == RUNNING &&
      tf->trapno == T_IRQ0+IRQ_TIMER)
     yield();
+  #endif
 
   // Check if the process has been killed since we yielded
   if(myproc() && myproc()->killed && (tf->cs&3) == DPL_USER)
