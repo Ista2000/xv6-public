@@ -13,6 +13,8 @@ struct gatedesc idt[256];
 extern uint vectors[];  // in vectors.S: array of 256 entry pointers
 struct spinlock tickslock;
 uint ticks;
+int qticks[] = {2, 2, 4, 16, 16};
+int subticks[] = {0, 1, 3, 7, 7};
 
 void
 tvinit(void)
@@ -57,7 +59,12 @@ trap(struct trapframe *tf)
     if(myproc())
     {
       if(myproc()->state == RUNNING)
+      {
+        #ifdef MLFQ
+        myproc()->ticks[myproc()->priority]++;
+        #endif
         myproc()->rtime++;
+      }
       else if(myproc()->state == SLEEPING)
         myproc()->iotime++;
     }
@@ -109,7 +116,22 @@ trap(struct trapframe *tf)
 
   // Force process to give up CPU on clock tick.
   // If interrupts were on while locks held, would need to check nlock.
-  #ifndef FCFS
+  // #ifdef PLOT
+  // if(myproc() && myproc()->state == RUNNING)
+  // {
+  //   struct stat_proc proc;
+  //   proc.pid = 0;
+  //   getpinfo(proc);
+  // }
+  // #endif
+
+  #ifdef MLFQ
+  if(myproc() && ticks - myproc()->last_boost > 150)
+    boost();
+  if(myproc() && myproc()->state == RUNNING &&
+     tf->trapno == T_IRQ0+IRQ_TIMER && (myproc()->rtime - subticks[myproc()->priority]) % qticks[myproc()->priority] == 0)
+    yield();
+  #elif !defined(FCFS)
   if(myproc() && myproc()->state == RUNNING &&
      tf->trapno == T_IRQ0+IRQ_TIMER)
     yield();

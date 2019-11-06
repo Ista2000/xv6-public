@@ -10,6 +10,11 @@
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
+  #ifdef MLFQ
+  struct proc *que[5][NPROC];
+  int head[5];
+  int tail[5];
+  #endif
 } ptable;
 
 static struct proc *initproc;
@@ -25,6 +30,10 @@ void
 pinit(void)
 {
   initlock(&ptable.lock, "ptable");
+  #ifdef MLFQ
+  for(int i = 0;i<5;i++)
+    ptable.head[i] = ptable.tail[i] = 0;
+  #endif
 }
 
 // Must be called with interrupts disabled
@@ -94,7 +103,14 @@ found:
   p->etime = 0;
   p->rtime = 0;
   p->iotime = 0;
+  p->num_run = 0;
+  p->ticks[0] = p->ticks[1] = p->ticks[2] = p->ticks[3] = p->ticks[4] = 0;
+  #ifdef MLFQ
+  p->priority = 0;
+  #else
   p->priority = 10;
+  #endif
+  p->last_boost = p->ctime;
   release(&tickslock);
 
   release(&ptable.lock);
@@ -156,6 +172,11 @@ userinit(void)
   // because the assignment might not be atomic.
   acquire(&ptable.lock);
 
+  #ifdef MLFQ
+  ptable.que[0][ptable.tail[0]] = p;
+  ptable.tail[0]++;
+  ptable.tail[0] %= NPROC;
+  #endif
   p->state = RUNNABLE;
 
   release(&ptable.lock);
@@ -222,6 +243,12 @@ fork(void)
 
   acquire(&ptable.lock);
 
+  #ifdef MLFQ
+  ptable.que[0][ptable.tail[0]] = np;
+  ptable.tail[0]++;
+  ptable.tail[0] %= NPROC;
+  #endif
+
   np->state = RUNNABLE;
 
   release(&ptable.lock);
@@ -272,9 +299,51 @@ exit(void)
   // Jump into the scheduler, never to return.
   curproc->state = ZOMBIE;
   curproc->etime = ticks;
-  cprintf("Process with pid %d and priority %d exiting!\n", curproc->pid, curproc->priority);
+  #ifdef PLOT
+  struct proc_stat proc;
+  proc.pid = 0;
+  getpinfo(&proc);
+  cprintf("Process %d: Ran %d times, for %d milliseconds with priority %d. %d %d %d %d %d ticks on respective priority queues.\n", proc.pid, proc.num_run, (int)(proc.runtime * 1000), proc.current_queue, proc.ticks[0], proc.ticks[1], proc.ticks[2], proc.ticks[3], proc.ticks[4]);
+  #endif
   sched();
   panic("zombie exit");
+}
+
+int getpinfo(struct proc_stat *proc)
+{
+  if(proc->pid == 0)
+  {
+    proc->pid = myproc()->pid;
+    proc->runtime = myproc()->rtime/100.0;
+    proc->num_run = myproc()->num_run;
+    proc->current_queue = myproc()->priority;
+    for(int i = 0;i<5;i++)
+      proc->ticks[i] = myproc()->ticks[i];
+  }
+  else
+  {
+    acquire(&ptable.lock);
+
+    struct proc *p;
+    for(p = ptable.proc; p < &ptable.proc[NPROC];p++)
+    {
+      if(p->pid == proc->pid)
+      {
+        proc->runtime = p->rtime/100.0;
+        proc->num_run = p->num_run;
+        proc->current_queue = p->priority;
+        for(int i = 0;i<5;i++)
+          proc->ticks[i] = p->ticks[i];
+        release(&ptable.lock);
+        return 25;
+      }
+    }
+
+    release(&ptable.lock);
+    return -1;
+  }
+
+  return 25;
 }
 
 // Wait for a child process to exit and return its pid.
@@ -407,6 +476,7 @@ scheduler(void)
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
       p = lowC;
+      p->num_run++;
       c->proc = p;
       switchuvm(p);
       p->state = RUNNING;
@@ -438,6 +508,7 @@ scheduler(void)
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
       p = highP;
+      p->num_run++;
       c->proc = p;
       switchuvm(p);
       p->state = RUNNING;
@@ -450,14 +521,38 @@ scheduler(void)
       // It should have changed its p->state before coming back.
       c->proc = 0;
     }
+    #elif defined MLFQ
 
+    for(int priority = 0;priority < 5;priority++)
+    {
+      while(ptable.head[priority] != ptable.tail[priority])
+      {
+        p = ptable.que[priority][ptable.head[priority]];
+
+        ptable.head[priority]++;
+        ptable.head[priority] %= NPROC;
+
+        if(p->priority != priority || p->state != RUNNABLE)
+          continue;
+
+        p->num_run++;
+        c->proc = p;
+        switchuvm(p);
+        p->state = RUNNING;
+
+        swtch(&(c->scheduler), p->context);
+        switchkvm();
+
+        c->proc = 0;
+        priority = 0;
+      }
+    }
 
     #else
 
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
-
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
@@ -482,9 +577,17 @@ scheduler(void)
 
 int set_priority(int pid, int priority)
 {
+  #ifdef MLFQ
+  priority = priority > 4?4:priority;
+  #endif
   acquire(&ptable.lock);
   for(struct proc *p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
     if(p->pid == pid) {
+      #ifdef MLFQ
+      ptable.que[priority][ptable.tail[priority]] = p;
+      ptable.tail[priority]++;
+      ptable.tail[priority] %= NPROC;
+      #endif
       p->priority = priority;
       break;
     }
@@ -519,11 +622,30 @@ sched(void)
   mycpu()->intena = intena;
 }
 
+#ifdef MLFQ
+void 
+boost(void)
+{
+  ptable.que[0][ptable.tail[0]] = myproc();
+  ptable.tail[0]++;
+  ptable.tail[0] %= NPROC;
+  myproc()->priority = 0;
+  myproc()->last_boost = ticks;
+}
+#endif
+
 // Give up the CPU for one scheduling round.
 void
 yield(void)
 {
   acquire(&ptable.lock);  //DOC: yieldlock
+  #ifdef MLFQ
+  if(myproc()->priority < 4)
+    myproc()->priority++;
+  ptable.que[myproc()->priority][ptable.tail[myproc()->priority]] = myproc();
+  ptable.tail[myproc()->priority]++;
+  ptable.tail[myproc()->priority] %= NPROC;
+  #endif
   myproc()->state = RUNNABLE;
   sched();
   release(&ptable.lock);
@@ -599,7 +721,14 @@ wakeup1(void *chan)
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
     if(p->state == SLEEPING && p->chan == chan)
+    {
+      #ifdef MLFQ
+      ptable.que[p->priority][ptable.tail[p->priority]] = p;
+      ptable.tail[p->priority] ++;
+      ptable.tail[p->priority] %= NPROC;
+      #endif
       p->state = RUNNABLE;
+    }
 }
 
 // Wake up all processes sleeping on chan.
@@ -625,7 +754,14 @@ kill(int pid)
       p->killed = 1;
       // Wake process from sleep if necessary.
       if(p->state == SLEEPING)
+      {
+        #ifdef MLFQ
+        ptable.que[p->priority][ptable.tail[p->priority]] = p;
+        ptable.tail[p->priority] ++;
+        ptable.tail[p->priority] %= NPROC;
+        #endif
         p->state = RUNNABLE;
+      }
       release(&ptable.lock);
       return 0;
     }

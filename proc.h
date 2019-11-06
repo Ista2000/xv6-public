@@ -55,6 +55,17 @@ struct proc {
   int etime;                   // End time
   int iotime;                  // I/O time
   int priority;                // priority of process, 1-100, low value = high priority
+  int last_boost;              // Tick number when it was last boosted
+  int num_run;                 // To assign to proc_stat
+  int ticks[5];                // To assign to proc_stat
+};
+
+struct proc_stat {
+  int pid;
+  float runtime;
+  int num_run;
+  int current_queue;
+  int ticks[5];
 };
 
 // Process memory is laid out contiguously, low addresses first:

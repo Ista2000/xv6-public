@@ -81,6 +81,9 @@ CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 &
 ifdef SCHEDULER
 CFLAGS += -D$(SCHEDULER)
 endif
+ifdef PLOT
+CFLAGS += -DPLOT
+endif
 ASFLAGS = -m32 -gdwarf-2 -Wa,-divide
 # FreeBSD ld wants ``elf_i386_fbsd''
 LDFLAGS += -m $(shell $(LD) -V | grep elf_i386 2>/dev/null | head -n 1)
@@ -180,9 +183,11 @@ UPROGS=\
 	_ls\
 	_mkdir\
 	_ps\
+	_pinfo\
 	_rm\
 	_sh\
 	_stressfs\
+	_test\
 	_usertests\
 	_wc\
 	_zombie\
@@ -257,7 +262,7 @@ qemu-nox-gdb: fs.img xv6.img .gdbinit
 
 EXTRA=\
 	mkfs.c ulib.c user.h cat.c echo.c forktest.c grep.c kill.c\
-	ln.c ls.c mkdir.c rm.c stressfs.c usertests.c wc.c zombie.c ps.c foo.c\
+	ln.c ls.c mkdir.c rm.c stressfs.c usertests.c wc.c zombie.c ps.c foo.c test.c pinfo.c\
 	printf.c umalloc.c\
 	README dot-bochsrc *.pl toc.* runoff runoff1 runoff.list\
 	.gdbinit.tmpl gdbutil\
