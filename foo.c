@@ -20,7 +20,7 @@ main(int argc, char *argv[])
 		else if(id == 0)
 		{
 			volatile double x = 0, y = 0.023;
-			for(int j = 0;j<=10000000;j++)
+			for(int j = 0;j<=15000000;j++)
 				x += 1.456 * 234.125 + y, y = x-2;
 			break;
 		}
